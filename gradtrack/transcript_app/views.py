@@ -1,5 +1,5 @@
 from django.shortcuts import render, get_object_or_404
-from .models import Student, Participation, AttributeStrengthMap
+from .models import Student, Participation, AttributeStrengthMap, Role, CharacterStrength
 from collections import defaultdict
 from datetime import date
 from django.http import HttpResponse
@@ -10,7 +10,6 @@ import io
 import weasyprint
 import base64
 
-
 def home(request):
     return render(request, 'transcript_app/home.html')
 
@@ -19,34 +18,51 @@ def transcript_view(request):
     student = get_object_or_404(Student, roll_no=roll_no)
     participations = Participation.objects.filter(student=student)
 
-    all_attributes = set()
-    for part in participations:
-        all_attributes.update(part.event.attributes.all())
+    strength_scores = defaultdict(float)
+    benchmark_scores = defaultdict(float)
 
-    strength_scores = defaultdict(list)
-    for attr in all_attributes:
-        mappings = AttributeStrengthMap.objects.filter(graduate_attribute=attr)
-        for map in mappings:
-            strength_scores[map.character_strength.name].append(map.weight)
+    for part in participations:
+        role_factor = part.role.factor if part.role else 1.0
+        for attr in part.event.attributes.all():
+            mappings = AttributeStrengthMap.objects.filter(graduate_attribute=attr)
+            for map in mappings:
+                weighted_score = map.weight * role_factor
+                strength_scores[map.character_strength.name] += weighted_score
+
+    all_participations = Participation.objects.all()
+    student_strength_totals = defaultdict(lambda: defaultdict(float))
+
+    for part in all_participations:
+        role_factor = part.role.factor if part.role else 1.0
+        for attr in part.event.attributes.all():
+            mappings = AttributeStrengthMap.objects.filter(graduate_attribute=attr)
+            for map in mappings:
+                student_strength_totals[part.student.roll_no][map.character_strength.name] += map.weight * role_factor
 
     strength_data = []
-    for strength, values in strength_scores.items():
-        avg = round(sum(values) / len(values), 2)
-        if avg >= 2.5:
+    all_strengths = CharacterStrength.objects.order_by('name')
+    for strength_obj in all_strengths:
+        name = strength_obj.name
+        score = strength_scores.get(name, 0)
+        benchmark = max([student_strength_totals[roll].get(name, 0) for roll in student_strength_totals], default=1)
+        percentage = (score / benchmark) * 100 if benchmark > 0 else 0
+        if percentage >= 90:
             category = "ESTD"
-        elif avg >= 1.5:
+        elif percentage >= 80:
             category = "DEV"
-        else:
+        elif percentage >= 60:
             category = "EMER"
+        else:
+            category = None
+
         strength_data.append({
-            'name': strength,
-            'average': avg,
+            'name': name,
+            'average': round(score, 2),
             'category': category
         })
 
     strength_data.sort(key=lambda x: x['name'])
 
-    # Top 5 most meaningful events based on number of graduate attributes
     sorted_events = sorted(participations, key=lambda p: len(p.event.attributes.all()), reverse=True)
     top_events = [p.event.name for p in sorted_events[:5]]
 
@@ -72,34 +88,51 @@ def transcript_pdf(request, roll_no):
     student = get_object_or_404(Student, roll_no=roll_no)
     participations = Participation.objects.filter(student=student)
 
-    all_attributes = set()
-    for part in participations:
-        all_attributes.update(part.event.attributes.all())
+    strength_scores = defaultdict(float)
+    benchmark_scores = defaultdict(float)
 
-    strength_scores = defaultdict(list)
-    for attr in all_attributes:
-        mappings = AttributeStrengthMap.objects.filter(graduate_attribute=attr)
-        for map in mappings:
-            strength_scores[map.character_strength.name].append(map.weight)
+    for part in participations:
+        role_factor = part.role.factor if part.role else 1.0
+        for attr in part.event.attributes.all():
+            mappings = AttributeStrengthMap.objects.filter(graduate_attribute=attr)
+            for map in mappings:
+                weighted_score = map.weight * role_factor
+                strength_scores[map.character_strength.name] += weighted_score
+
+    all_participations = Participation.objects.all()
+    student_strength_totals = defaultdict(lambda: defaultdict(float))
+
+    for part in all_participations:
+        role_factor = part.role.factor if part.role else 1.0
+        for attr in part.event.attributes.all():
+            mappings = AttributeStrengthMap.objects.filter(graduate_attribute=attr)
+            for map in mappings:
+                student_strength_totals[part.student.roll_no][map.character_strength.name] += map.weight * role_factor
 
     strength_data = []
-    for strength, values in strength_scores.items():
-        avg = round(sum(values) / len(values), 2)
-        if avg >= 2.5:
+    all_strengths = CharacterStrength.objects.order_by('name')
+    for strength_obj in all_strengths:
+        name = strength_obj.name
+        score = strength_scores.get(name, 0)
+        benchmark = max([student_strength_totals[roll].get(name, 0) for roll in student_strength_totals], default=1)
+        percentage = (score / benchmark) * 100 if benchmark > 0 else 0
+        if percentage >= 90:
             category = "ESTD"
-        elif avg >= 1.5:
+        elif percentage >= 80:
             category = "DEV"
-        else:
+        elif percentage >= 60:
             category = "EMER"
+        else:
+            category = None
+
         strength_data.append({
-            'name': strength,
-            'average': avg,
+            'name': name,
+            'average': round(score, 2),
             'category': category
         })
 
     strength_data.sort(key=lambda x: x['name'])
 
-    # Top 5 most meaningful events based on number of graduate attributes
     sorted_events = sorted(participations, key=lambda p: len(p.event.attributes.all()), reverse=True)
     top_events = [p.event.name for p in sorted_events[:5]]
 
@@ -113,7 +146,7 @@ def transcript_pdf(request, roll_no):
         qr.save(buf, format='PNG')
         qr_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
 
-    template = get_template('transcript_app/transcript.html')
+    template = get_template('transcript_app/pdf.html')
     html = template.render({
         'student': student,
         'strength_data': strength_data,
